@@ -517,66 +517,106 @@
 </script>
 
 <script>
-// ホームに参加グループの共有テストを表示（個人の保存データは変更しません）
+// ホームの「直近のテスト」に個人・共有を日付順でまとめる
 (() => {
   const client = window.supabase.createClient('https://ugkywdddyvvnnggexypr.supabase.co', 'sb_publishable_QlJjT5rd4PsV0-TKJenH_Q_kvtNSl5D');
   const root = document.getElementById('content');
-  let serial = 0;
-  const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  function isHome() { return !!root.querySelector('.hero') && !!document.querySelector('[data-tab="home"].active'); }
-  async function loadHomeShared() {
-    const run = ++serial;
-    if (!isHome()) return;
-    let panel = document.getElementById('home-shared-exams');
-    if (!panel) {
-      panel = document.createElement('section');
-      panel.id = 'home-shared-exams';
-      panel.className = 'panel';
-      panel.innerHTML = '<h2>👥 グループのテスト予定</h2><p class="muted" id="home-shared-status">読み込み中…</p><div id="home-shared-list"></div><button type="button" class="secondary" id="home-shared-refresh">更新する</button>';
-      root.appendChild(panel);
-      panel.querySelector('#home-shared-refresh').onclick = loadHomeShared;
-    }
-    const status = panel.querySelector('#home-shared-status');
-    const list = panel.querySelector('#home-shared-list');
-    status.textContent = '読み込み中…';
-    try {
-      const { data: { user }, error: authError } = await client.auth.getUser();
-      if (authError) throw authError;
-      if (!user) { if (run === serial && panel.isConnected) { status.textContent = 'ログインすると共有テストが表示されるよ。'; list.replaceChildren(); } return; }
-      const { data: memberships, error: groupsError } = await client.from('study_groups').select('id,name');
-      if (groupsError) throw groupsError;
-      if (!memberships?.length) { if (run === serial && panel.isConnected) { status.textContent = '参加しているグループはまだありません。'; list.replaceChildren(); } return; }
-      const ids = memberships.map(g => g.id);
-      const { data: exams, error: examError } = await client.from('exams').select('id,group_id,subject,exam_date,exam_range').in('group_id', ids).order('exam_date', { ascending: true });
-      if (examError) throw examError;
-      if (run !== serial || !panel.isConnected || !isHome()) return;
-      list.replaceChildren();
-      const names = new Map(memberships.map(g => [g.id,g.name]));
-      const today = new Date(); today.setHours(0,0,0,0);
-      const future = (exams || []).filter(x => x.exam_date && new Date(x.exam_date + 'T00:00:00') >= today);
-      status.textContent = future.length ? '友達が登録した予定もここに表示されるよ。' : 'これからの共有テストはまだありません。';
-      for (const exam of future) {
-        const entry = document.createElement('div');
-        entry.className = 'entry';
-        entry.style.cursor = 'default';
-        entry.innerHTML = '<span class="chip">👥 ' + escapeHTML(names.get(exam.group_id) || 'グループ') + '</span> <span class="chip">' + escapeHTML(exam.exam_date) + '</span><div style="margin-top:9px"><strong>' + escapeHTML(exam.subject) + '</strong></div><p style="white-space:pre-wrap">' + escapeHTML(exam.exam_range || '範囲未入力') + '</p>';
-        list.appendChild(entry);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const localToday = () => { const d = new Date(); return [d.getFullYear(), String(d.getMonth()+1).padStart(2,'0'), String(d.getDate()).padStart(2,'0')].join('-'); };
+  const formatDate = v => { const [y,m,d] = v.split('-').map(Number); return `${m}月${d}日(${['日','月','火','水','木','金','土'][new Date(y,m-1,d).getDay()]})`; };
+  const dayDiff = v => Math.round((new Date(v+'T00:00:00') - new Date(localToday()+'T00:00:00')) / 86400000);
+  let generation = 0;
+  const isHome = () => !!root.querySelector('.hero') && !!document.querySelector('[data-tab="home"].active');
+
+  async function updateHome() {
+    const run = ++generation;
+    if (!isHome() || root.querySelector('#merged-test-list')) return;
+    const heading = [...root.querySelectorAll('.section-title h2')].find(h => h.textContent === '直近のテスト');
+    if (!heading) return;
+    const section = heading.closest('.section-title');
+    const merged = document.createElement('div');
+    merged.id = 'merged-test-list';
+    merged.innerHTML = '<p class="muted">共有テストを読み込み中…</p>';
+    section.after(merged);
+    // 既存の個人予定ボタンはイベント処理を保持するため、そのまま移動する。
+    const personal = [];
+    let node = merged.nextElementSibling;
+    let date = '';
+    while (node) {
+      const next = node.nextElementSibling;
+      if (node.classList.contains('day')) {
+        const match = node.textContent.match(/^(\d+)月(\d+)日/);
+        // 日付は保存データの順番から取得（年またぎにも対応）。
+        date = match ? match[1] + '-' + match[2] : '';
+        node.remove();
+      } else if (node.matches('button.entry[data-edit]')) {
+        personal.push(node);
+        node.remove();
+      } else if (node.classList.contains('panel') && node.textContent.includes('テストがまだ登録されていません')) {
+        node.remove();
       }
-    } catch (e) {
-      if (run === serial && panel.isConnected) { status.textContent = '共有テストを読み込めませんでした：' + (e.message || '通信エラー'); list.replaceChildren(); }
+      node = next;
+    }
+    const raw = (() => { try { const x=JSON.parse(localStorage.getItem('test-range-demo-v1')||'[]'); return Array.isArray(x)?x:[]; } catch { return []; } })();
+    const localItems = raw.filter(x=>x && typeof x.date==='string' && x.date >= localToday())
+      .sort((a,b)=>a.date.localeCompare(b.date)||String(a.period||'').localeCompare(String(b.period||'')));
+    const records = localItems.map((item,i)=>({date:item.date, subject:item.subject, range:item.scope||'', kind:'personal', element:personal[i]})).filter(x=>x.element);
+    let warning = '';
+    try {
+      const {data:{user},error:authError} = await client.auth.getUser();
+      if (authError) throw authError;
+      if (user) {
+        const {data:groups,error:groupError} = await client.from('study_groups').select('id,name');
+        if (groupError) throw groupError;
+        if (groups?.length) {
+          const names = new Map(groups.map(g=>[g.id,g.name]));
+          const {data:exams,error:examError} = await client.from('exams').select('id,group_id,subject,exam_date,exam_range').in('group_id',groups.map(g=>g.id)).gte('exam_date',localToday()).order('exam_date',{ascending:true});
+          if (examError) throw examError;
+          for (const exam of exams||[]) {
+            // 「＋」で共有した同一内容は個人保存もされるため、二重表示しない。
+            const duplicate = records.some(x=>x.kind==='personal' && x.date===exam.exam_date && x.subject===exam.subject && x.range===(exam.exam_range||''));
+            if (duplicate) {
+              const match = records.find(x=>x.kind==='personal' && x.date===exam.exam_date && x.subject===exam.subject && x.range===(exam.exam_range||''));
+              if (match) match.sharedLabel = '👥 共有';
+              continue;
+            }
+            const element = document.createElement('div');
+            element.className = 'entry';
+            element.style.cursor = 'default';
+            element.innerHTML = `<span class="circle">${esc((exam.subject||'?').slice(0,1))}</span><strong>${esc(exam.subject)}</strong> <span class="chip">👥 共有</span><p style="white-space:pre-wrap">${esc(exam.exam_range||'範囲未入力')}</p>`;
+            records.push({date:exam.exam_date,subject:exam.subject,kind:'shared',element});
+          }
+        }
+      }
+    } catch (e) { warning = '共有テストを読み込めませんでした：'+(e.message||'通信エラー'); }
+    if (run !== generation || !isHome() || !merged.isConnected) return;
+    merged.replaceChildren();
+    if (warning) {
+      const msg = document.createElement('p'); msg.className='muted'; msg.textContent=warning; merged.appendChild(msg);
+    }
+    records.sort((a,b)=>a.date.localeCompare(b.date)||String(a.subject).localeCompare(String(b.subject),'ja'));
+    if (!records.length) { const empty=document.createElement('div');empty.className='panel muted';empty.textContent='テストがまだ登録されていません。下の「＋」から追加できます。';merged.appendChild(empty);return; }
+    let last = '';
+    for (const record of records) {
+      if (record.date !== last) {
+        last=record.date;
+        const label=document.createElement('div');label.className='day';
+        label.innerHTML=`${esc(formatDate(last))} <span class="chip">${dayDiff(last)>=0?'あと'+dayDiff(last)+'日':'終了'}</span>`;
+        merged.appendChild(label);
+      }
+      if (record.sharedLabel && !record.element.querySelector('.shared-indicator')) {
+        const badge=document.createElement('span');badge.className='chip shared-indicator';badge.textContent=record.sharedLabel;badge.style.marginLeft='8px';
+        record.element.querySelector('strong')?.after(badge);
+      }
+      merged.appendChild(record.element);
     }
   }
-  // 元のアプリはホームを再描画するため、画面切り替えを検出します。
-  const observer = new MutationObserver(() => {
-    if (isHome() && !document.getElementById('home-shared-exams')) loadHomeShared();
-    if (!isHome()) ++serial;
-  });
-  observer.observe(root, { childList: true });
-  document.querySelector('[data-tab="home"]').addEventListener('click', () => setTimeout(loadHomeShared, 0));
-  client.auth.onAuthStateChange(() => setTimeout(loadHomeShared, 0));
-  window.addEventListener('shared-groups-changed', loadHomeShared);
-  window.addEventListener('focus', () => { if (isHome()) loadHomeShared(); });
-  if (isHome()) loadHomeShared();
+  const observer = new MutationObserver(() => { if (isHome() && !root.querySelector('#merged-test-list')) updateHome(); });
+  observer.observe(root,{childList:true});
+  document.querySelector('[data-tab="home"]').addEventListener('click',()=>setTimeout(updateHome,0));
+  client.auth.onAuthStateChange(()=>setTimeout(()=>{ if (isHome()) { document.querySelector('[data-tab="home"]').click(); } },0));
+  window.addEventListener('focus',()=>{if(isHome()){root.querySelector('#merged-test-list')?.remove(); /* 個人のカードは移動済みなので画面再描画が必要 */ document.querySelector('[data-tab="home"]').click();}});
+  if (isHome()) updateHome();
 })();
 </script>
 </body>
