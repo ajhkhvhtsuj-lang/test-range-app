@@ -159,7 +159,7 @@
               const link = new URL(window.location.href);
               link.searchParams.set('invite', inviteId);
               link.hash = '';
-              inviteOutput.textContent = '7日間有効・1人だけ参加できます。';
+              inviteOutput.textContent = '7日間有効・最大30人まで参加できます。';
               const copyButton = document.createElement('button');
               copyButton.className = 'secondary';
               copyButton.textContent = 'リンクをコピー';
@@ -275,5 +275,144 @@
 })();
 </script>
 
+<script>
+// グループ共有テスト（個人用の予定は変更しません）
+(() => {
+  const client = window.supabase.createClient(
+    'https://ugkywdddyvvnnggexypr.supabase.co',
+    'sb_publishable_QlJjT5rd4PsV0-TKJenH_Q_kvtNSl5D'
+  );
+  const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  let selectedGroup = '';
+  let currentGroups = [];
+  let requestId = 0;
+
+  async function showShared() {
+    const root = document.getElementById('content');
+    if (!root || root.querySelector('h1')?.textContent !== '設定') return;
+    if (document.getElementById('shared-exams-panel')) return;
+    const panel = document.createElement('section');
+    panel.id = 'shared-exams-panel';
+    panel.className = 'panel';
+    panel.innerHTML = `
+      <h2>📚 グループのテスト範囲</h2>
+      <p class="muted">ここに登録した予定は、同じグループのメンバーに共有されます。個人用の予定はそのままです。</p>
+      <label class="field" for="shared-group">共有するグループ</label>
+      <select id="shared-group" class="control"><option value="">読み込み中…</option></select>
+      <div id="shared-list" aria-live="polite" class="muted" style="margin-top:14px"></div>
+      <h3 style="font-size:16px;margin-top:20px">共有テストを追加</h3>
+      <form id="shared-form">
+        <label class="field" for="shared-subject">教科 *</label>
+        <input id="shared-subject" class="control" required maxlength="50" placeholder="例：数学">
+        <label class="field" for="shared-date">テスト日 *</label>
+        <input id="shared-date" class="control" type="date" required>
+        <label class="field" for="shared-range">テスト範囲</label>
+        <textarea id="shared-range" class="control" rows="3" maxlength="1000" placeholder="例：教科書20〜40ページ"></textarea>
+        <button type="submit" class="primary">グループに共有する</button>
+      </form>
+      <p id="shared-status" class="muted" role="status" aria-live="polite"></p>
+      <button id="shared-refresh" type="button" class="secondary">一覧を更新</button>
+    `;
+    root.appendChild(panel);
+    const select = panel.querySelector('#shared-group');
+    const list = panel.querySelector('#shared-list');
+    const status = panel.querySelector('#shared-status');
+    const submit = panel.querySelector('[type="submit"]');
+
+    async function refresh() {
+      const current = ++requestId;
+      if (!selectedGroup) { list.textContent = 'グループを選んでね。'; return; }
+      list.textContent = '読み込み中…';
+      const { data, error } = await client.from('exams')
+        .select('id,subject,exam_date,exam_range')
+        .eq('group_id', selectedGroup)
+        .order('exam_date', { ascending: true });
+      if (!panel.isConnected || current !== requestId) return;
+      if (error) { list.textContent = '読み込めませんでした：' + error.message; return; }
+      if (!data?.length) { list.textContent = 'まだ共有テストはありません。'; return; }
+      list.replaceChildren();
+      for (const exam of data) {
+        const item = document.createElement('div');
+        item.style.cssText = 'padding:12px;margin:8px 0;border:1px solid #e0eaf0;border-radius:14px;background:#f5fbff';
+        const detail = document.createElement('div');
+        detail.innerHTML = `<strong>${escapeHTML(exam.subject)}</strong> <span class="chip">${escapeHTML(exam.exam_date)}</span><p class="muted" style="white-space:pre-wrap">${escapeHTML(exam.exam_range || '範囲未入力')}</p>`;
+        const edit = document.createElement('button');
+        edit.type = 'button'; edit.className = 'secondary'; edit.textContent = '編集';
+        edit.onclick = async () => {
+          const subject = prompt('教科を編集', exam.subject);
+          if (subject === null) return;
+          if (!subject.trim() || subject.trim().length > 50) return alert('教科は1〜50文字で入力してね');
+          const date = prompt('テスト日（YYYY-MM-DD）', exam.exam_date);
+          if (date === null) return;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) return alert('日付を確認してね');
+          const range = prompt('テスト範囲', exam.exam_range || '');
+          if (range === null) return;
+          if (range.length > 1000) return alert('テスト範囲は1000文字以内にしてね');
+          edit.disabled = true;
+          const { error } = await client.from('exams').update({ subject: subject.trim(), exam_date: date, exam_range: range }).eq('id', exam.id).eq('group_id', selectedGroup);
+          edit.disabled = false;
+          if (error) status.textContent = '編集できませんでした：' + error.message;
+          else { status.textContent = '変更を保存したよ！'; await refresh(); }
+        };
+        const del = document.createElement('button');
+        del.type = 'button'; del.className = 'danger'; del.style.marginLeft = '8px'; del.textContent = '削除';
+        del.onclick = async () => {
+          if (!confirm('この共有テストを削除しますか？（友達の画面からも消えます）')) return;
+          del.disabled = true;
+          const { error } = await client.from('exams').delete().eq('id', exam.id).eq('group_id', selectedGroup);
+          del.disabled = false;
+          if (error) status.textContent = '削除できませんでした：' + error.message;
+          else { status.textContent = '削除したよ'; await refresh(); }
+        };
+        item.append(detail, edit, del);
+        list.appendChild(item);
+      }
+    }
+
+    async function loadGroups() {
+      const { data: { user }, error: authError } = await client.auth.getUser();
+      if (authError || !user) { select.innerHTML = '<option value="">ログインしてね</option>'; list.textContent = 'ログインすると使えます。'; return; }
+      const { data, error } = await client.from('study_groups').select('id,name').order('created_at', { ascending: false });
+      if (error) { select.innerHTML = '<option value="">読み込みエラー</option>'; list.textContent = error.message; return; }
+      currentGroups = data || [];
+      select.replaceChildren();
+      if (!currentGroups.length) { select.add(new Option('参加しているグループがありません', '')); selectedGroup = ''; list.textContent = '先にグループを作成・参加してね。'; return; }
+      for (const group of currentGroups) select.add(new Option(group.name, group.id));
+      if (!currentGroups.some(g => g.id === selectedGroup)) selectedGroup = currentGroups[0].id;
+      select.value = selectedGroup;
+      await refresh();
+    }
+
+    select.onchange = () => { selectedGroup = select.value; status.textContent = ''; refresh(); };
+    panel.querySelector('#shared-refresh').onclick = () => { status.textContent = ''; loadGroups(); };
+    panel.querySelector('#shared-form').onsubmit = async event => {
+      event.preventDefault();
+      if (!selectedGroup) { status.textContent = 'グループを選んでね'; return; }
+      const subject = panel.querySelector('#shared-subject').value.trim();
+      const date = panel.querySelector('#shared-date').value;
+      const range = panel.querySelector('#shared-range').value.trim();
+      if (!subject || !date) return;
+      submit.disabled = true;
+      status.textContent = '共有中…';
+      const { error } = await client.from('exams').insert({ group_id: selectedGroup, subject, exam_date: date, exam_range: range });
+      submit.disabled = false;
+      if (error) status.textContent = '共有できませんでした：' + error.message;
+      else {
+        status.textContent = 'グループに共有したよ！友達は「設定 → グループのテスト範囲 → 一覧を更新」で確認できるよ。';
+        panel.querySelector('#shared-form').reset();
+        await refresh();
+      }
+    };
+    loadGroups();
+  }
+
+  document.querySelector('[data-tab="settings"]').addEventListener('click', () => setTimeout(showShared, 0));
+  client.auth.onAuthStateChange(() => setTimeout(() => {
+    const panel = document.getElementById('shared-exams-panel');
+    if (panel) { panel.remove(); showShared(); }
+  }, 0));
+  showShared();
+})();
+</script>
 </body>
 </html>
