@@ -175,6 +175,28 @@
           };
           item.appendChild(inviteButton);
           item.appendChild(inviteOutput);
+          const deleteGroupButton = document.createElement('button');
+          deleteGroupButton.type = 'button';
+          deleteGroupButton.className = 'danger';
+          deleteGroupButton.style.margin = '10px 0 0 8px';
+          deleteGroupButton.textContent = 'グループを削除';
+          deleteGroupButton.onclick = async () => {
+            if (!confirm('「' + group.name + '」を削除しますか？\nメンバー全員の共有テストと招待リンクも削除され、元に戻せません。')) return;
+            const answer = prompt('本当に削除する場合は「削除」と入力してね');
+            if (answer !== '削除') return;
+            deleteGroupButton.disabled = true;
+            try {
+              const { error } = await client.rpc('delete_study_group', { p_group_id: group.id });
+              if (error) throw error;
+              alert('グループを削除したよ');
+              await loadGroups(panel);
+              window.dispatchEvent(new Event('shared-groups-changed'));
+            } catch (e) {
+              alert('削除できませんでした：' + (e.message || '通信エラー'));
+              deleteGroupButton.disabled = false;
+            }
+          };
+          item.appendChild(deleteGroupButton);
         }
         list.appendChild(item);
       }
@@ -196,7 +218,7 @@
       <h2>友達との共有グループ</h2>
       <h3 style="font-size:16px;margin:18px 0 8px">参加しているグループ</h3>
       <div id="group-list" class="muted" aria-live="polite">読み込み中…</div>
-      <p class="muted">グループの作成者は招待リンクを発行できます。テスト予定の共有はまだ準備中です。</p>
+      <p class="muted">グループの作成者は招待リンクを発行・グループを削除できます。削除すると全員の共有テストも消えます。</p>
       <label class="field" for="group-name">グループ名</label>
       <input class="control" id="group-name" maxlength="100" placeholder="例：テスト勉強チーム">
       <button class="primary" id="create-group" type="button">グループを作成</button>
@@ -491,6 +513,70 @@
   const observer = new MutationObserver(() => { if (root.querySelector('#exam-form:not([data-share-ready])')) setup(); });
   observer.observe(root,{childList:true,subtree:true});
   setup();
+})();
+</script>
+
+<script>
+// ホームに参加グループの共有テストを表示（個人の保存データは変更しません）
+(() => {
+  const client = window.supabase.createClient('https://ugkywdddyvvnnggexypr.supabase.co', 'sb_publishable_QlJjT5rd4PsV0-TKJenH_Q_kvtNSl5D');
+  const root = document.getElementById('content');
+  let serial = 0;
+  const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function isHome() { return !!root.querySelector('.hero') && !!document.querySelector('[data-tab="home"].active'); }
+  async function loadHomeShared() {
+    const run = ++serial;
+    if (!isHome()) return;
+    let panel = document.getElementById('home-shared-exams');
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.id = 'home-shared-exams';
+      panel.className = 'panel';
+      panel.innerHTML = '<h2>👥 グループのテスト予定</h2><p class="muted" id="home-shared-status">読み込み中…</p><div id="home-shared-list"></div><button type="button" class="secondary" id="home-shared-refresh">更新する</button>';
+      root.appendChild(panel);
+      panel.querySelector('#home-shared-refresh').onclick = loadHomeShared;
+    }
+    const status = panel.querySelector('#home-shared-status');
+    const list = panel.querySelector('#home-shared-list');
+    status.textContent = '読み込み中…';
+    try {
+      const { data: { user }, error: authError } = await client.auth.getUser();
+      if (authError) throw authError;
+      if (!user) { if (run === serial && panel.isConnected) { status.textContent = 'ログインすると共有テストが表示されるよ。'; list.replaceChildren(); } return; }
+      const { data: memberships, error: groupsError } = await client.from('study_groups').select('id,name');
+      if (groupsError) throw groupsError;
+      if (!memberships?.length) { if (run === serial && panel.isConnected) { status.textContent = '参加しているグループはまだありません。'; list.replaceChildren(); } return; }
+      const ids = memberships.map(g => g.id);
+      const { data: exams, error: examError } = await client.from('exams').select('id,group_id,subject,exam_date,exam_range').in('group_id', ids).order('exam_date', { ascending: true });
+      if (examError) throw examError;
+      if (run !== serial || !panel.isConnected || !isHome()) return;
+      list.replaceChildren();
+      const names = new Map(memberships.map(g => [g.id,g.name]));
+      const today = new Date(); today.setHours(0,0,0,0);
+      const future = (exams || []).filter(x => x.exam_date && new Date(x.exam_date + 'T00:00:00') >= today);
+      status.textContent = future.length ? '友達が登録した予定もここに表示されるよ。' : 'これからの共有テストはまだありません。';
+      for (const exam of future) {
+        const entry = document.createElement('div');
+        entry.className = 'entry';
+        entry.style.cursor = 'default';
+        entry.innerHTML = '<span class="chip">👥 ' + escapeHTML(names.get(exam.group_id) || 'グループ') + '</span> <span class="chip">' + escapeHTML(exam.exam_date) + '</span><div style="margin-top:9px"><strong>' + escapeHTML(exam.subject) + '</strong></div><p style="white-space:pre-wrap">' + escapeHTML(exam.exam_range || '範囲未入力') + '</p>';
+        list.appendChild(entry);
+      }
+    } catch (e) {
+      if (run === serial && panel.isConnected) { status.textContent = '共有テストを読み込めませんでした：' + (e.message || '通信エラー'); list.replaceChildren(); }
+    }
+  }
+  // 元のアプリはホームを再描画するため、画面切り替えを検出します。
+  const observer = new MutationObserver(() => {
+    if (isHome() && !document.getElementById('home-shared-exams')) loadHomeShared();
+    if (!isHome()) ++serial;
+  });
+  observer.observe(root, { childList: true });
+  document.querySelector('[data-tab="home"]').addEventListener('click', () => setTimeout(loadHomeShared, 0));
+  client.auth.onAuthStateChange(() => setTimeout(loadHomeShared, 0));
+  window.addEventListener('shared-groups-changed', loadHomeShared);
+  window.addEventListener('focus', () => { if (isHome()) loadHomeShared(); });
+  if (isHome()) loadHomeShared();
 })();
 </script>
 </body>
