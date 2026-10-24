@@ -414,5 +414,84 @@
   showShared();
 })();
 </script>
+<script>
+// 通常の「＋」登録画面から共有。共有しない選択もできます。
+(() => {
+  const client = window.supabase.createClient('https://ugkywdddyvvnnggexypr.supabase.co','sb_publishable_QlJjT5rd4PsV0-TKJenH_Q_kvtNSl5D');
+  const root = document.getElementById('content');
+  let generation = 0;
+  async function setup() {
+    const form = root.querySelector('#exam-form');
+    if (!form || form.dataset.shareReady) return;
+    form.dataset.shareReady = 'yes';
+    // 既存の個人用予定の編集は従来どおり。共有済み予定の編集は設定から。
+    if (root.querySelector('h1')?.textContent === 'テストを編集') return;
+    const myGeneration = ++generation;
+    const area = document.createElement('div');
+    area.style.cssText = 'margin-top:18px;padding:14px;border:1px solid #bde6f5;border-radius:14px;background:#f0faff';
+    area.innerHTML = `<label style="display:flex;align-items:center;gap:10px;font-weight:700"><input type="checkbox" id="auto-share" checked style="width:22px;height:22px">👥 グループに共有する</label><div id="auto-share-options"><label class="field" for="auto-share-group">共有先のグループ</label><select id="auto-share-group" class="control" required><option value="">読み込み中…</option></select></div><p class="muted" id="auto-share-hint">共有するとグループの友達もテスト範囲を見られます。共有しない場合はチェックを外してね。</p>`;
+    form.querySelector('button[type="submit"]').before(area);
+    const check = area.querySelector('#auto-share');
+    const options = area.querySelector('#auto-share-options');
+    const select = area.querySelector('#auto-share-group');
+    const hint = area.querySelector('#auto-share-hint');
+    function toggle() { options.hidden = !check.checked; select.required = check.checked; }
+    check.onchange = toggle;
+    toggle();
+    try {
+      const { data: { user } } = await client.auth.getUser();
+      if (!user) throw new Error('ログインすると共有できます');
+      const { data, error } = await client.from('study_groups').select('id,name').order('created_at',{ascending:false});
+      if (error) throw error;
+      if (!form.isConnected || generation !== myGeneration) return;
+      select.replaceChildren();
+      if (!data?.length) {
+        select.add(new Option('参加しているグループがありません',''));
+        check.checked = false;
+        check.disabled = true;
+        hint.textContent = '共有するには、設定からグループを作成・参加してね。今回は自分だけに保存されます。';
+      } else {
+        for (const group of data) select.add(new Option(group.name,group.id));
+      }
+      toggle();
+    } catch(e) {
+      if (!form.isConnected) return;
+      check.checked = false;
+      check.disabled = true;
+      select.replaceChildren(new Option('共有できません',''));
+      hint.textContent = '共有を使うにはログインしてね。今回は自分だけに保存されます。';
+      toggle();
+    }
+    // 共有ONの場合だけ先にSupabaseへ登録。成功後に既存の個人保存処理を動かす。
+    form.addEventListener('submit', async event => {
+      if (!check.checked) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const groupId = select.value;
+      if (!groupId) return alert('共有するグループを選んでね');
+      const subject = form.querySelector('#subject').value.trim();
+      const date = form.querySelector('#date').value;
+      const range = form.querySelector('#scope').value.trim();
+      if (!subject || !date) return alert('教科と日付を確認してね');
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = '共有して保存中…';
+      try {
+        const {error} = await client.from('exams').insert({group_id:groupId,subject,exam_date:date,exam_range:range});
+        if (error) throw error;
+        // 元の保存処理を呼ぶため、一時的にチェックをOFFにして送信イベントを再発火。
+        check.checked = false;
+        form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));
+      } catch(e) {
+        alert('グループに共有できませんでした：'+(e.message||'通信エラー')+'\n今回は保存していません。もう一度試すか、共有のチェックを外して保存してね。');
+      } finally { button.disabled = false; button.textContent = original; }
+    }, true);
+  }
+  const observer = new MutationObserver(() => { if (root.querySelector('#exam-form:not([data-share-ready])')) setup(); });
+  observer.observe(root,{childList:true,subtree:true});
+  setup();
+})();
+</script>
 </body>
 </html>
