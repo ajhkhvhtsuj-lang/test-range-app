@@ -129,19 +129,53 @@
         return;
       }
       const { data, error } = await client.from('study_groups')
-        .select('id,name,created_at')
-        .eq('created_by', user.id)
+        .select('id,name,created_at,created_by')
         .order('created_at', { ascending: false });
       if (error) throw error;
       list.replaceChildren();
       if (!data || data.length === 0) {
-        list.textContent = 'まだ作成したグループはありません。';
+        list.textContent = 'まだ参加しているグループはありません。';
         return;
       }
       for (const group of data) {
         const item = document.createElement('div');
         item.style.cssText = 'padding:13px 12px;margin:8px 0;border:1px solid #e0eaf0;border-radius:14px;background:#f5fbff;color:#1b2937;font-weight:700';
-        item.textContent = '👥 ' + group.name;
+        const title = document.createElement('div');
+        title.textContent = '👥 ' + group.name;
+        item.appendChild(title);
+        if (group.created_by === user.id) {
+          const inviteButton = document.createElement('button');
+          inviteButton.className = 'secondary';
+          inviteButton.style.marginTop = '10px';
+          inviteButton.textContent = '🔗 招待リンクを作る';
+          const inviteOutput = document.createElement('div');
+          inviteOutput.className = 'muted';
+          inviteButton.onclick = async () => {
+            inviteButton.disabled = true;
+            inviteOutput.textContent = 'リンクを作成中…';
+            try {
+              const { data: inviteId, error } = await client.rpc('create_study_group_invite', { p_group_id: group.id });
+              if (error) throw error;
+              const link = new URL(window.location.href);
+              link.searchParams.set('invite', inviteId);
+              link.hash = '';
+              inviteOutput.textContent = '7日間有効・1人だけ参加できます。';
+              const copyButton = document.createElement('button');
+              copyButton.className = 'secondary';
+              copyButton.textContent = 'リンクをコピー';
+              copyButton.style.marginTop = '8px';
+              copyButton.onclick = async () => {
+                try { await navigator.clipboard.writeText(link.href); copyButton.textContent = 'コピーできたよ！'; }
+                catch (_) { window.prompt('このリンクをコピーしてね', link.href); }
+              };
+              inviteOutput.appendChild(document.createElement('br'));
+              inviteOutput.appendChild(copyButton);
+            } catch (e) { inviteOutput.textContent = '作成できませんでした：' + (e.message || '通信エラー'); }
+            finally { inviteButton.disabled = false; }
+          };
+          item.appendChild(inviteButton);
+          item.appendChild(inviteOutput);
+        }
         list.appendChild(item);
       }
     } catch (error) {
@@ -160,9 +194,9 @@
     panel.className = 'panel';
     panel.innerHTML = `
       <h2>友達との共有グループ</h2>
-      <h3 style="font-size:16px;margin:18px 0 8px">作成したグループ</h3>
+      <h3 style="font-size:16px;margin:18px 0 8px">参加しているグループ</h3>
       <div id="group-list" class="muted" aria-live="polite">読み込み中…</div>
-      <p class="muted">グループを作成できます。友達の招待やテスト予定の共有は、まだ準備中です。</p>
+      <p class="muted">グループの作成者は招待リンクを発行できます。テスト予定の共有はまだ準備中です。</p>
       <label class="field" for="group-name">グループ名</label>
       <input class="control" id="group-name" maxlength="100" placeholder="例：テスト勉強チーム">
       <button class="primary" id="create-group" type="button">グループを作成</button>
@@ -193,6 +227,36 @@
       }
     });
   }
+
+  // 招待URLを開いた友達に参加確認を表示する
+  async function showInvitePrompt() {
+    const token = new URLSearchParams(window.location.search).get('invite');
+    if (!token) return;
+    const area = document.createElement('section');
+    area.className = 'panel';
+    area.innerHTML = '<h2>グループへの招待</h2><p class="muted">招待リンクを受け取りました。参加するにはログインが必要です。</p><button class="primary" type="button">このグループに参加する</button><p class="muted" role="status"></p>';
+    document.querySelector('main.wrap').prepend(area);
+    const button = area.querySelector('button');
+    const status = area.querySelector('[role="status"]');
+    button.onclick = async () => {
+      button.disabled = true;
+      status.textContent = '確認中…';
+      try {
+        const { data: { user }, error: authError } = await client.auth.getUser();
+        if (authError || !user) throw new Error('先に上のログイン欄からログインしてね。');
+        const { data: groupName, error } = await client.rpc('join_study_group_invite', { p_invite_id: token });
+        if (error) throw error;
+        status.textContent = '「' + groupName + '」に参加できたよ！設定で確認してね。';
+        button.remove();
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete('invite');
+        history.replaceState(null, '', clean.href);
+        const panel = document.getElementById('group-panel');
+        if (panel) await loadGroups(panel);
+      } catch (e) { status.textContent = '参加できませんでした：' + (e.message || '通信エラー'); button.disabled = false; }
+    };
+  }
+  showInvitePrompt();
 
   document.querySelector('[data-tab="settings"]').addEventListener('click', () => {
     setTimeout(showGroupPanel, 0);
