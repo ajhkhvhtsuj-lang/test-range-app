@@ -980,7 +980,7 @@
 <script>
 // Web Push 購読登録。公開鍵のみブラウザに配置。秘密鍵はSupabase Secretsに保存する。
 (()=>{
- const VAPID_PUBLIC_KEY='BOy8ndH7XDkPVtm_zEEKdvmylxUbp8mHoO57CchkKJi9BIdwLQ9g3ETuyBgpBj4JwVPALbriLYiYAUvtE973aDQ';
+ const VAPID_PUBLIC_KEY='BBGNsRlk4nJFBCXAGu2b46MKtio2sJYGzqjK2kqRO97En26FJ8rQK-RrdH8Y1Rir0FrJiv-w3MJ7zuNDnDE3FyM';
  const db=window.supabase.createClient('https://ugkywdddyvvnnggexypr.supabase.co','sb_publishable_QlJjT5rd4PsV0-TKJenH_Q_kvtNSl5D');
  const root=document.getElementById('content');
  function bytes(base64url){const base64=base64url.replace(/-/g,'+').replace(/_/g,'/');const raw=atob(base64.padEnd(Math.ceil(base64.length/4)*4,'='));return Uint8Array.from(raw,c=>c.charCodeAt(0));}
