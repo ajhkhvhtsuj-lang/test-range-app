@@ -1250,7 +1250,15 @@
       img.loading = 'lazy';
       img.style.cssText =
         'display:block;max-width:100%;max-height:300px;border-radius:12px;margin-top:8px';
+      // 写真の保存先を示す文字列だけ非表示にする
+const textDiv = [...item.querySelectorAll('div')]
+  .find(el => el.textContent.includes('[写真] '));
 
+if (textDiv) {
+  textDiv.textContent = textDiv.textContent
+    .replace(/\[写真\] [^\s]+/, '')
+    .trim();
+}
       item.appendChild(img);
     }
   }
