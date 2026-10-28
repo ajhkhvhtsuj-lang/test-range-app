@@ -1123,5 +1123,146 @@
 })();
 </script>
 
+<script>
+(() => {
+  const db = window.supabase.createClient(
+    'https://ugkywdddyvvnnggexypr.supabase.co',
+    'sb_publishable_QlJjT5rd4PsV0-TKJenH_Q_kvtNSl5D'
+  );
+
+  const root = document.getElementById('content');
+  const BUCKET = 'study-chat-images';
+
+  function setup() {
+    const form = root.querySelector('#chat-form');
+    if (!form || form.dataset.photoReady) return;
+    form.dataset.photoReady = '1';
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/jpeg,image/png,image/webp,image/gif';
+    input.id = 'chat-photo';
+    input.className = 'control';
+    input.style.marginTop = '10px';
+
+    const label = document.createElement('label');
+    label.className = 'field';
+    label.textContent = '📷 写真を選ぶ（5MBまで）';
+
+    const button = form.querySelector('[type="submit"]');
+    button.before(label, input);
+
+    form.addEventListener('submit', async event => {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const groupId = root.querySelector('#chat-group')?.value;
+      const text = root.querySelector('#chat-text');
+      const status = root.querySelector('#chat-status');
+
+      if (!groupId) return alert('グループを選んでね');
+      if (!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)) {
+        return alert('JPEG・PNG・WebP・GIFの写真を選んでね');
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        return alert('写真は5MB以下にしてね');
+      }
+
+      button.disabled = true;
+      status.textContent = '写真を送信中…';
+
+      try {
+        const { data: { user } } = await db.auth.getUser();
+        if (!user) throw new Error('ログインしてね');
+
+        const ext = {
+          'image/jpeg':'jpg',
+          'image/png':'png',
+          'image/webp':'webp',
+          'image/gif':'gif'
+        }[file.type];
+
+        const path = `${groupId}/${user.id}/${crypto.randomUUID()}.${ext}`;
+
+        const { error: uploadError } = await db.storage
+          .from(BUCKET)
+          .upload(path, file, { contentType:file.type });
+
+        if (uploadError) throw uploadError;
+
+        const body = (text.value.trim() + '\n[写真] ' + path).trim();
+
+        const { error: messageError } = await db
+          .from('study_group_messages')
+          .insert({ group_id:groupId, user_id:user.id, body });
+
+        if (messageError) {
+          await db.storage.from(BUCKET).remove([path]);
+          throw messageError;
+        }
+
+        input.value = '';
+        text.value = '';
+        status.textContent = '写真を送れたよ！';
+        root.querySelector('#chat-refresh')?.click();
+
+      } catch (error) {
+        status.textContent = '送信できませんでした：' + error.message;
+      } finally {
+        button.disabled = false;
+      }
+    }, true);
+  }
+
+  async function showPhotos() {
+    const messages = root.querySelector('#chat-messages');
+    if (!messages) return;
+
+    for (const item of messages.children) {
+      if (item.dataset.photoChecked) continue;
+      item.dataset.photoChecked = '1';
+
+      const body = [...item.querySelectorAll('div')]
+        .find(el => el.textContent.includes('[写真] '));
+
+      if (!body) continue;
+
+      const match = body.textContent.match(/\[写真\] ([^\s]+)/);
+      if (!match) continue;
+
+      const path = match[1];
+      const groupId = root.querySelector('#chat-group')?.value;
+
+      if (!path.startsWith(groupId + '/')) continue;
+
+      const { data, error } = await db.storage
+        .from(BUCKET)
+        .createSignedUrl(path, 3600);
+
+      if (error || !data?.signedUrl || !item.isConnected) continue;
+
+      const img = document.createElement('img');
+      img.src = data.signedUrl;
+      img.alt = 'チャットで共有された写真';
+      img.loading = 'lazy';
+      img.style.cssText =
+        'display:block;max-width:100%;max-height:300px;border-radius:12px;margin-top:8px';
+
+      item.appendChild(img);
+    }
+  }
+
+  new MutationObserver(() => {
+    setup();
+    showPhotos().catch(console.warn);
+  }).observe(root, { childList:true, subtree:true });
+
+  setup();
+})();
+</script>
+
 </body>
 </html>
