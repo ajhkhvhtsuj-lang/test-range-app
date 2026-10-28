@@ -1079,5 +1079,49 @@
 })();
 </script>
 
+<script>
+(() => {
+  const root = document.getElementById('content');
+
+  // グロースナビの下にターゲット1200を追加
+  function showTarget() {
+    const growth = root.querySelector('#growth-navi-panel');
+    if (!growth || root.querySelector('#target-panel')) return;
+
+    const panel = document.createElement('section');
+    panel.id = 'target-panel';
+    panel.className = 'panel';
+    panel.innerHTML = `
+      <h2>📘 ターゲット1200</h2>
+      <p class="muted">英単語のPDFを開けるよ。</p>
+      <a class="primary"
+         href="./target1200.pdf"
+         target="_blank"
+         rel="noopener"
+         style="display:block;text-align:center;text-decoration:none">
+        ターゲット1200を開く →
+      </a>
+    `;
+    growth.after(panel);
+  }
+
+  // チャットを開いたら画面上部の通知を消す
+  function clearChatNotices() {
+    document.querySelectorAll('#study-notices .notice').forEach(box => {
+      if (box.textContent.includes('グループチャット')) box.remove();
+    });
+  }
+
+  new MutationObserver(showTarget).observe(root, {childList:true});
+
+  document.querySelector('[data-tab="ai"]').addEventListener('click', clearChatNotices);
+  root.addEventListener('click', e => {
+    if (e.target.closest('#mode-chat')) clearChatNotices();
+  });
+
+  showTarget();
+})();
+</script>
+
 </body>
 </html>
